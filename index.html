@@ -418,9 +418,10 @@ function populateForm(data, imageWidth, imageHeight) {
   const tagIdx = words.findIndex(w => /TAG/i.test(w.text));
   if (tagIdx >= 0) {
     const label = words[tagIdx];
+    const labelH = label.bbox.y1 - label.bbox.y0;
     const candidates = words.filter((w, i) =>
       i > tagIdx &&
-      Math.abs(w.bbox.y0 - label.bbox.y0) < 20 &&
+      Math.abs(w.bbox.y0 - label.bbox.y0) < labelH * 0.8 && // same row band
       /\d/.test(w.text) // must contain a digit
     );
     // Use the digits of the first numeric candidate.
@@ -434,18 +435,24 @@ function populateForm(data, imageWidth, imageHeight) {
   }
   document.getElementById('f_tag').value = tag;
 
-  // Customer name: all-caps word run just below a VIN-like 17-char token
+  // Customer name: all-caps word run on the line just below a VIN-like
+  // 17-char token, in the left column (the name prints directly under the
+  // VIN). The vertical band is sized from the VIN's own text height rather
+  // than a fixed pixel count, so it stays correct regardless of how much
+  // preprocessing upscaled the image.
   let name = "";
   const vinIdx = words.findIndex(w => /^[A-HJ-NPR-Z0-9]{17}$/.test(w.text.toUpperCase()));
   if (vinIdx >= 0) {
     const vin = words[vinIdx];
+    const lineH = vin.bbox.y1 - vin.bbox.y0;
     const nameWords = words.filter(w =>
-      w.bbox.y0 > vin.bbox.y1 &&
-      w.bbox.y0 < vin.bbox.y1 + 40 &&
-      /^[A-Z]+$/.test(w.text)
+      w.bbox.y0 >= vin.bbox.y1 - lineH * 0.3 &&        // start of next line
+      w.bbox.y0 < vin.bbox.y1 + lineH * 1.5 &&          // ~one line below
+      w.bbox.x0 < imageWidth * 0.4 &&                   // left column only
+      /^[A-Z][A-Z'.-]*$/.test(w.text)                   // an all-caps word
     );
-    name = nameWords.map(w => w.text).join(' ');
-    console.log("Customer Name:", name || "(none found)", "| VIN token:", vin.text, "| name candidates:", nameWords.map(w => w.text));
+    name = nameWords.map(w => w.text.replace(/[^A-Z'.-]/g, '')).join(' ').trim();
+    console.log("Customer Name:", name || "(none found)", "| VIN token:", vin.text, "| lineH:", lineH, "| name candidates:", nameWords.map(w => w.text));
   } else {
     console.log("Customer Name: (no VIN-like 17-char token found)");
   }
