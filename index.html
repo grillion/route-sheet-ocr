@@ -32,6 +32,8 @@
   <div id="controls">
     <button id="startCam">Start Camera</button>
     <button id="capture" disabled>Capture &amp; Scan</button>
+    <button id="uploadBtn">Upload Photo</button>
+    <input type="file" id="fileInput" accept="image/*" style="display:none;">
   </div>
   <div id="status"></div>
 
@@ -145,11 +147,44 @@ captureBtn.onclick = async () => {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0);
+  if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+  await runOcr(canvas);
+};
+
+const uploadBtn = document.getElementById('uploadBtn');
+const fileInput = document.getElementById('fileInput');
+
+uploadBtn.onclick = () => fileInput.click();
+
+fileInput.onchange = async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+    img.src = url;
+  });
+
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  canvas.getContext('2d').drawImage(img, 0, 0);
+  URL.revokeObjectURL(url);
+
+  if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+  await runOcr(canvas);
+  fileInput.value = '';
+};
+
+async function runOcr(source) {
   captureBtn.disabled = true;
+  uploadBtn.disabled = true;
   statusEl.textContent = "Running OCR... this can take 10-30s";
 
   try {
-    const { data } = await Tesseract.recognize(canvas, 'eng', {
+    const { data } = await Tesseract.recognize(source, 'eng', {
       logger: m => {
         if (m.status === 'recognizing text') {
           statusEl.textContent = `OCR: ${(m.progress * 100).toFixed(0)}%`;
@@ -162,9 +197,10 @@ captureBtn.onclick = async () => {
   } catch (err) {
     statusEl.textContent = "OCR error: " + err.message;
   } finally {
-    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+    captureBtn.disabled = false;
+    uploadBtn.disabled = false;
   }
-};
+}
 
 function populateForm(data) {
   const words = (data.words || []).filter(w => w.text && w.text.trim().length);
