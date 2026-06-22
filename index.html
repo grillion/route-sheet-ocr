@@ -192,6 +192,7 @@ async function runOcr(source) {
       }
     });
     statusEl.textContent = "Done. Review the fields below before opening the form.";
+    logOcrDebug(data, source.width, source.height);
     populateForm(data, source.width, source.height);
     document.getElementById('reviewForm').style.display = 'block';
   } catch (err) {
@@ -202,18 +203,31 @@ async function runOcr(source) {
   }
 }
 
+function logOcrDebug(data, imageWidth, imageHeight) {
+  const words = (data.words || []).filter(w => w.text && w.text.trim().length);
+  console.group(`OCR result (image ${imageWidth}x${imageHeight}, ${words.length} words, ${(data.confidence ?? 0).toFixed?.(1) ?? data.confidence}% avg confidence)`);
+  console.log("Raw text:\n" + data.text);
+  console.table(words.map(w => ({
+    text: w.text,
+    confidence: w.confidence,
+    x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1
+  })));
+  console.groupEnd();
+}
+
 function populateForm(data, imageWidth, imageHeight) {
   const words = (data.words || []).filter(w => w.text && w.text.trim().length);
   const text = data.text || "";
+
+  console.group("Field extraction");
 
   // Advisor #: exact match against the known dropdown list.
   // Uses the raw token (not digit-stripped) so dates like 11/18/25 can't
   // collapse into a number that happens to match an advisor ID.
   let advisor = "";
-  for (const w of words) {
-    const clean = w.text.trim();
-    if (/^\d+$/.test(clean) && ADVISORS.includes(clean)) { advisor = clean; break; }
-  }
+  const advisorCandidates = words.filter(w => /^\d+$/.test(w.text.trim()) && ADVISORS.includes(w.text.trim()));
+  if (advisorCandidates.length) advisor = advisorCandidates[0].text.trim();
+  console.log("Advisor #:", advisor || "(none found)", "| candidates:", advisorCandidates.map(w => w.text));
   document.getElementById('f_advisor').value = advisor;
 
   // RO #: a pure 6-digit token (no slashes/colons, so dates like 11/18/25
@@ -227,6 +241,7 @@ function populateForm(data, imageWidth, imageHeight) {
   let ro = "";
   if (topRight.length) {
     ro = topRight[0].text.trim();
+    console.log("RO #:", ro, "| top-right candidates:", topRight.map(w => ({ text: w.text, bbox: w.bbox })));
   } else {
     const freq = {};
     for (const w of sixDigitWords) freq[w.text] = (freq[w.text] || 0) + 1;
@@ -234,6 +249,7 @@ function populateForm(data, imageWidth, imageHeight) {
     for (const [k, v] of Object.entries(freq)) {
       if (v > max) { max = v; ro = k; }
     }
+    console.log("RO #:", ro || "(none found)", "| no top-right match, frequency table:", freq, "| all 6-digit tokens:", sixDigitWords.map(w => ({ text: w.text, bbox: w.bbox })));
   }
   document.getElementById('f_ro').value = ro;
 
@@ -248,6 +264,9 @@ function populateForm(data, imageWidth, imageHeight) {
       !/^(NO|#|\.)$/i.test(w.text)
     );
     if (candidates.length) tag = candidates[0].text.replace(/[^A-Za-z0-9]/g, '');
+    console.log("Tag #:", tag || "(none found)", "| label word:", label.text, "| row candidates:", candidates.map(w => w.text));
+  } else {
+    console.log("Tag #: (no 'TAG' label found in OCR output)");
   }
   document.getElementById('f_tag').value = tag;
 
@@ -262,16 +281,24 @@ function populateForm(data, imageWidth, imageHeight) {
       /^[A-Z]+$/.test(w.text)
     );
     name = nameWords.map(w => w.text).join(' ');
+    console.log("Customer Name:", name || "(none found)", "| VIN token:", vin.text, "| name candidates:", nameWords.map(w => w.text));
+  } else {
+    console.log("Customer Name: (no VIN-like 17-char token found)");
   }
   document.getElementById('f_name').value = name;
 
   // Type of work: keyword scan over the job description text
+  const typeMatches = [];
   for (const [regex, category] of KEYWORD_MAP) {
     if (regex.test(text)) {
+      typeMatches.push(category);
       const cb = document.querySelector(`input[name="type"][value="${category}"]`);
       if (cb) cb.checked = true;
     }
   }
+  console.log("Type of Work matches:", typeMatches.length ? typeMatches : "(none)");
+
+  console.groupEnd();
 }
 
 document.getElementById('genLink').onclick = () => {
