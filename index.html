@@ -38,6 +38,14 @@
   <div id="status"></div>
   <button id="debugBtn" style="background:#555;font-size:0.85em;padding:6px 12px;">Show Debug Console</button>
 
+  <div id="overlayWrap" style="display:none;">
+    <h2 style="font-size:1em;">What the OCR saw
+      <span class="warn" style="font-weight:normal;">(green = read confidently, red = low confidence, blue = region crop)</span>
+    </h2>
+    <canvas id="overlay" style="width:100%; max-height:80vh; object-fit:contain; border:1px solid #444; border-radius:8px; background:#000;"></canvas>
+    <a id="overlayDownload" download="ocr-overlay.png" style="display:none; background:#555; color:#fff; text-decoration:none; padding:8px 12px; border-radius:6px; font-size:0.85em;">Download annotated image</a>
+  </div>
+
   <form id="reviewForm">
     <h2 style="font-size:1em;">Review &amp; correct before opening the form</h2>
 
@@ -350,6 +358,10 @@ async function runOcr(source) {
     statusEl.textContent = "Reading fixed fields...";
     await runRegionOcr(worker, prepped);
 
+    // Visual debug: draw the detected word boxes + region crops over the
+    // (preprocessed) image so you can see exactly what was scanned.
+    renderOverlay(prepped, data);
+
     statusEl.textContent = "Done. Review the fields below before opening the form.";
     document.getElementById('reviewForm').style.display = 'block';
   } catch (err) {
@@ -358,6 +370,45 @@ async function runOcr(source) {
     captureBtn.disabled = false;
     uploadBtn.disabled = false;
   }
+}
+
+// Draw the OCR word boxes (green = confident, red = low confidence) and the
+// fixed-template region crops (blue) over the preprocessed image, so you can
+// see what Tesseract actually read and where. Also offers a full-res download.
+function renderOverlay(prepped, data) {
+  const overlay = document.getElementById('overlay');
+  overlay.width = prepped.width;
+  overlay.height = prepped.height;
+  const ctx = overlay.getContext('2d');
+  ctx.drawImage(prepped, 0, 0);
+
+  const words = (data.words || []).filter(w => w.text && w.text.trim().length);
+  const lw = Math.max(2, Math.round(prepped.width / 700));
+  ctx.lineWidth = lw;
+  ctx.font = `${Math.max(12, Math.round(prepped.width / 120))}px sans-serif`;
+  ctx.textBaseline = 'bottom';
+  for (const w of words) {
+    const b = w.bbox;
+    ctx.strokeStyle = w.confidence >= 60 ? 'rgba(0,170,0,0.9)' : 'rgba(230,0,0,0.9)';
+    ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+  }
+
+  // Region crop rectangles (thicker, blue).
+  ctx.lineWidth = lw * 2;
+  ctx.strokeStyle = 'rgba(40,130,255,0.95)';
+  ctx.fillStyle = 'rgba(40,130,255,0.95)';
+  for (const key of Object.keys(REGIONS)) {
+    const r = REGIONS[key].rect;
+    const x = r.x * prepped.width, y = r.y * prepped.height;
+    const w = r.w * prepped.width, h = r.h * prepped.height;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillText(REGIONS[key].label, x, Math.max(y - lw, ctx.measureText('M').actualBoundingBoxAscent || 16));
+  }
+
+  document.getElementById('overlayWrap').style.display = 'block';
+  const dl = document.getElementById('overlayDownload');
+  dl.href = overlay.toDataURL('image/png');
+  dl.style.display = 'inline-block';
 }
 
 function logOcrDebug(data, imageWidth, imageHeight) {
