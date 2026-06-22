@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Field Box Calibration</title>
+<style>
+  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 12px; background: #111; color: #eee; }
+  h1 { font-size: 1.2em; }
+  p, li { font-size: 0.9em; color: #ccc; line-height: 1.4; }
+  button { font-size: 0.95em; padding: 8px 12px; margin: 4px 6px 4px 0; border-radius: 6px; border: 1px solid #555; background: #222; color: #eee; }
+  button.active { background: #2a7; border-color: #2a7; color: #fff; }
+  #fields { margin: 8px 0; }
+  #canvasWrap { position: relative; touch-action: none; }
+  canvas { width: 100%; border: 1px solid #444; border-radius: 6px; background: #000; cursor: crosshair; }
+  textarea { width: 100%; box-sizing: border-box; height: 160px; background: #222; color: #9f9; border: 1px solid #555; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 0.85em; }
+  .row { margin: 10px 0; }
+  a { color: #9cf; }
+  .hint { color: #fc6; }
+</style>
+</head>
+<body>
+  <h1>Field Box Calibration</h1>
+  <p>
+    Load a photo of the form <span class="hint">framed exactly the way you'll
+    scan it</span> (the page filling the frame, upright). Pick a field, then
+    drag a box over that field's value on the image. Repeat for each field.
+    When done, copy the generated code at the bottom into
+    <strong>regions.js</strong>, replacing its <code>FIELD_RECTS</code> block.
+  </p>
+
+  <div class="row">
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+
+  <div id="fields">Active field: <span id="fieldButtons"></span></div>
+
+  <div id="canvasWrap">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="row">
+    <button id="clearActive">Clear active field's box</button>
+    <button id="clearAll">Clear all boxes</button>
+  </div>
+
+  <div class="row">
+    <strong>Paste this into regions.js:</strong>
+    <button id="copyBtn" style="float:right;">Copy</button>
+    <textarea id="output" readonly></textarea>
+  </div>
+
+  <p><a href="index.html">&larr; Back to scanner</a></p>
+
+<script src="regions.js"></script>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let img = null;
+
+// Start from whatever is currently in regions.js, so you refine existing boxes.
+const rects = JSON.parse(JSON.stringify(FIELD_RECTS));
+const fieldKeys = Object.keys(FIELD_LOGIC);
+let activeField = fieldKeys[0];
+
+// Distinct color per field for the overlay.
+const COLORS = ['#2af', '#fa2', '#2fa', '#f6a', '#af2', '#a6f'];
+const colorOf = k => COLORS[fieldKeys.indexOf(k) % COLORS.length];
+
+function buildFieldButtons() {
+  const wrap = document.getElementById('fieldButtons');
+  wrap.innerHTML = '';
+  fieldKeys.forEach(k => {
+    const b = document.createElement('button');
+    b.textContent = FIELD_LOGIC[k].label + (rects[k] ? ' ✓' : '');
+    b.className = k === activeField ? 'active' : '';
+    b.style.borderColor = colorOf(k);
+    b.onclick = () => { activeField = k; buildFieldButtons(); };
+    wrap.appendChild(b);
+  });
+}
+
+document.getElementById('fileInput').onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  img = new Image();
+  img.onload = () => {
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    redraw();
+  };
+  img.src = URL.createObjectURL(file);
+};
+
+function redraw(dragRect) {
+  if (!img) return;
+  ctx.drawImage(img, 0, 0);
+  ctx.lineWidth = Math.max(2, canvas.width / 500);
+  ctx.font = `${Math.max(14, canvas.width / 80)}px sans-serif`;
+  ctx.textBaseline = 'bottom';
+  for (const k of fieldKeys) {
+    const r = rects[k];
+    if (!r) continue;
+    ctx.strokeStyle = ctx.fillStyle = colorOf(k);
+    const x = r.x * canvas.width, y = r.y * canvas.height;
+    const w = r.w * canvas.width, h = r.h * canvas.height;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillText(FIELD_LOGIC[k].label, x, Math.max(y - 4, 16));
+  }
+  if (dragRect) {
+    ctx.strokeStyle = colorOf(activeField);
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(dragRect.x, dragRect.y, dragRect.w, dragRect.h);
+    ctx.setLineDash([]);
+  }
+  updateOutput();
+}
+
+// --- Drag to draw (mouse + touch) -----------------------------------------
+let dragging = false, startX = 0, startY = 0;
+
+function toCanvas(e) {
+  const rect = canvas.getBoundingClientRect();
+  const p = e.touches ? e.touches[0] : e;
+  return {
+    x: (p.clientX - rect.left) / rect.width * canvas.width,
+    y: (p.clientY - rect.top) / rect.height * canvas.height,
+  };
+}
+
+function down(e) {
+  if (!img) return;
+  e.preventDefault();
+  dragging = true;
+  const p = toCanvas(e);
+  startX = p.x; startY = p.y;
+}
+function move(e) {
+  if (!dragging) return;
+  e.preventDefault();
+  const p = toCanvas(e);
+  redraw({ x: Math.min(startX, p.x), y: Math.min(startY, p.y), w: Math.abs(p.x - startX), h: Math.abs(p.y - startY) });
+}
+function up(e) {
+  if (!dragging) return;
+  dragging = false;
+  const p = toCanvas(e.changedTouches ? { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY } : e);
+  const x = Math.min(startX, p.x), y = Math.min(startY, p.y);
+  const w = Math.abs(p.x - startX), h = Math.abs(p.y - startY);
+  if (w < 4 || h < 4) { redraw(); return; } // ignore stray taps
+  rects[activeField] = {
+    x: +(x / canvas.width).toFixed(4),
+    y: +(y / canvas.height).toFixed(4),
+    w: +(w / canvas.width).toFixed(4),
+    h: +(h / canvas.height).toFixed(4),
+  };
+  // Auto-advance to the next un-boxed field for speed.
+  const next = fieldKeys.find(k => !rects[k]);
+  if (next) activeField = next;
+  buildFieldButtons();
+  redraw();
+}
+
+canvas.addEventListener('mousedown', down);
+canvas.addEventListener('mousemove', move);
+window.addEventListener('mouseup', up);
+canvas.addEventListener('touchstart', down, { passive: false });
+canvas.addEventListener('touchmove', move, { passive: false });
+canvas.addEventListener('touchend', up);
+
+document.getElementById('clearActive').onclick = () => { delete rects[activeField]; buildFieldButtons(); redraw(); };
+document.getElementById('clearAll').onclick = () => { for (const k of fieldKeys) delete rects[k]; buildFieldButtons(); redraw(); };
+
+function updateOutput() {
+  let s = "const FIELD_RECTS = {\n";
+  for (const k of fieldKeys) {
+    const r = rects[k];
+    if (!r) continue;
+    const pad = (k + ":").padEnd(9);
+    s += `  ${pad} { x: ${r.x.toFixed(4)}, y: ${r.y.toFixed(4)}, w: ${r.w.toFixed(4)}, h: ${r.h.toFixed(4)} },\n`;
+  }
+  s += "};";
+  document.getElementById('output').value = s;
+}
+
+document.getElementById('copyBtn').onclick = () => {
+  const ta = document.getElementById('output');
+  ta.select();
+  navigator.clipboard?.writeText(ta.value);
+};
+
+buildFieldButtons();
+updateOutput();
+</script>
+</body>
+</html>

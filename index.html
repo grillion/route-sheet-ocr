@@ -37,6 +37,7 @@
   </div>
   <div id="status"></div>
   <button id="debugBtn" style="background:#555;font-size:0.85em;padding:6px 12px;">Show Debug Console</button>
+  <a href="calibrate.html" style="color:#9cf;font-size:0.85em;margin-left:8px;">Calibrate field boxes</a>
 
   <div id="overlayWrap" style="display:none;">
     <h2 style="font-size:1em;">What the OCR saw
@@ -115,6 +116,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="regions.js"></script>
 <script>
 // On-screen console for phones (no desktop browser / tethering needed).
 // Loaded on demand so it doesn't run unless you ask for it.
@@ -134,7 +136,7 @@ document.getElementById('debugBtn').onclick = function () {
   document.body.appendChild(s);
 };
 
-const ADVISORS = ["142399","17824","159720","160629","159462"];
+// ADVISORS, FIELD_RECTS, FIELD_LOGIC and REGIONS now live in regions.js.
 
 const KEYWORD_MAP = [
   [/BRAKE/i, "BRAKES"],
@@ -261,25 +263,6 @@ function preprocess(source) {
   return out;
 }
 
-// Fixed-template regions to OCR individually, as fractions of the page
-// (x, y, w, h). Because this dealership's RO layout is fixed, cropping a
-// known zone and OCRing just that — with a tight character whitelist —
-// is far more reliable than hunting for the value in the full-page text.
-// NOTE: this assumes the page roughly fills the frame upright (as in a flat
-// scan). For badly cropped/rotated photos the full-page heuristics still run
-// as a fallback, so a wrong region crop degrades gracefully rather than
-// breaking. Add more entries here to pin down other fixed fields.
-const REGIONS = {
-  ro: {
-    label: "RO #",
-    rect: { x: 0.72, y: 0.0, w: 0.23, h: 0.09 }, // top-right corner
-    whitelist: "0123456789",
-    psm: "7", // single text line
-    parse: t => (t.match(/\d{6}/) || [""])[0],
-    target: "f_ro",
-  },
-};
-
 let ocrWorker = null;
 async function getWorker() {
   if (!ocrWorker) {
@@ -320,14 +303,11 @@ async function runRegionOcr(worker, prepped) {
       const raw = (data.text || '').trim();
       const value = region.parse ? region.parse(raw) : raw;
       console.log(`${region.label}: parsed "${value}" from region text "${raw}" (conf ${data.confidence})`);
-      if (value) {
-        const el = document.getElementById(region.target);
-        if (el) el.value = value;
-      } else {
-        console.log(`${region.label}: region OCR empty — keeping full-page heuristic result`);
-      }
+      const el = document.getElementById(region.target);
+      if (el) el.value = value; // empty string clears the field if nothing read
+      if (!value) console.log(`${region.label}: region OCR produced no value — left blank for manual entry`);
     } catch (err) {
-      console.log(`${region.label}: region OCR failed (${err.message}) — keeping full-page result`);
+      console.log(`${region.label}: region OCR failed (${err.message}) — left blank for manual entry`);
     }
   }
   console.groupEnd();
@@ -342,8 +322,8 @@ async function runOcr(source) {
     const prepped = preprocess(source);
     const worker = await getWorker();
 
-    // Pass 1: full page (auto layout, no whitelist) — drives Type of Work,
-    // Name, Tag, and serves as the fallback for RO #.
+    // Pass 1: full page (auto layout, no whitelist). Used only for the Type
+    // of Work keyword scan and for the debug overlay/word list.
     statusEl.textContent = "Running OCR... this can take 10-30s";
     await worker.setParameters({
       tessedit_char_whitelist: '',
@@ -351,10 +331,10 @@ async function runOcr(source) {
     });
     const { data } = await worker.recognize(prepped);
     logOcrDebug(data, prepped.width, prepped.height);
-    populateForm(data, prepped.width, prepped.height);
+    populateForm(data);
 
-    // Pass 2: targeted region OCR for fixed-position fields (overrides the
-    // full-page guess when it produces a clean value).
+    // Pass 2: targeted region OCR — authoritative for every fixed field
+    // (name, RO #, advisor, tag) using the bounds defined in regions.js.
     statusEl.textContent = "Reading fixed fields...";
     await runRegionOcr(worker, prepped);
 
@@ -423,93 +403,13 @@ function logOcrDebug(data, imageWidth, imageHeight) {
   console.groupEnd();
 }
 
-function populateForm(data, imageWidth, imageHeight) {
-  const words = (data.words || []).filter(w => w.text && w.text.trim().length);
+// The fixed fields (name, RO #, advisor, tag) are filled by region OCR
+// (see runRegionOcr + regions.js). The only thing derived from the full-page
+// text is Type of Work, which is a keyword scan over the job-description
+// lines rather than a single fixed box.
+function populateForm(data) {
   const text = data.text || "";
-
-  console.group("Field extraction");
-
-  // Advisor #: exact match against the known dropdown list.
-  // Uses the raw token (not digit-stripped) so dates like 11/18/25 can't
-  // collapse into a number that happens to match an advisor ID.
-  let advisor = "";
-  const advisorCandidates = words.filter(w => /^\d+$/.test(w.text.trim()) && ADVISORS.includes(w.text.trim()));
-  if (advisorCandidates.length) advisor = advisorCandidates[0].text.trim();
-  console.log("Advisor #:", advisor || "(none found)", "| candidates:", advisorCandidates.map(w => w.text));
-  document.getElementById('f_advisor').value = advisor;
-
-  // RO #: a pure 6-digit token (no slashes/colons, so dates like 11/18/25
-  // can't be mistaken for it) located in the top-right corner of the page,
-  // where this dealership prints the RO number. Falls back to whichever
-  // pure 6-digit token repeats most often (header/barcode/footer).
-  const sixDigitWords = words.filter(w => /^\d{6}$/.test(w.text.trim()));
-  const topRight = sixDigitWords.filter(w =>
-    w.bbox.x0 > imageWidth * 0.55 && w.bbox.y1 < imageHeight * 0.25
-  );
-  let ro = "";
-  if (topRight.length) {
-    ro = topRight[0].text.trim();
-    console.log("RO #:", ro, "| top-right candidates:", topRight.map(w => ({ text: w.text, bbox: w.bbox })));
-  } else {
-    const freq = {};
-    for (const w of sixDigitWords) freq[w.text] = (freq[w.text] || 0) + 1;
-    let max = 0;
-    for (const [k, v] of Object.entries(freq)) {
-      if (v > max) { max = v; ro = k; }
-    }
-    console.log("RO #:", ro || "(none found)", "| no top-right match, frequency table:", freq, "| all 6-digit tokens:", sixDigitWords.map(w => ({ text: w.text, bbox: w.bbox })));
-  }
-  document.getElementById('f_ro').value = ro;
-
-  // Tag #: nearest purely-numeric word to the right of a "TAG" label, same
-  // row band. Requiring digits-only skips the label text itself ("TAG NO.")
-  // — e.g. the "NO" of "NO." is not numeric, so it can't be mistaken for a
-  // tag value. The tag value, when present, is a number.
-  let tag = "";
-  const tagIdx = words.findIndex(w => /TAG/i.test(w.text));
-  if (tagIdx >= 0) {
-    const label = words[tagIdx];
-    const labelH = label.bbox.y1 - label.bbox.y0;
-    const candidates = words.filter((w, i) =>
-      i > tagIdx &&
-      Math.abs(w.bbox.y0 - label.bbox.y0) < labelH * 0.8 && // same row band
-      /\d/.test(w.text) // must contain a digit
-    );
-    // Use the digits of the first numeric candidate.
-    for (const w of candidates) {
-      const digits = w.text.replace(/\D/g, '');
-      if (digits) { tag = digits; break; }
-    }
-    console.log("Tag #:", tag || "(none found)", "| label word:", label.text, "| numeric row candidates:", candidates.map(w => w.text));
-  } else {
-    console.log("Tag #: (no 'TAG' label found in OCR output)");
-  }
-  document.getElementById('f_tag').value = tag;
-
-  // Customer name: all-caps word run on the line just below a VIN-like
-  // 17-char token, in the left column (the name prints directly under the
-  // VIN). The vertical band is sized from the VIN's own text height rather
-  // than a fixed pixel count, so it stays correct regardless of how much
-  // preprocessing upscaled the image.
-  let name = "";
-  const vinIdx = words.findIndex(w => /^[A-HJ-NPR-Z0-9]{17}$/.test(w.text.toUpperCase()));
-  if (vinIdx >= 0) {
-    const vin = words[vinIdx];
-    const lineH = vin.bbox.y1 - vin.bbox.y0;
-    const nameWords = words.filter(w =>
-      w.bbox.y0 >= vin.bbox.y1 - lineH * 0.3 &&        // start of next line
-      w.bbox.y0 < vin.bbox.y1 + lineH * 1.5 &&          // ~one line below
-      w.bbox.x0 < imageWidth * 0.4 &&                   // left column only
-      /^[A-Z][A-Z'.-]*$/.test(w.text)                   // an all-caps word
-    );
-    name = nameWords.map(w => w.text.replace(/[^A-Z'.-]/g, '')).join(' ').trim();
-    console.log("Customer Name:", name || "(none found)", "| VIN token:", vin.text, "| lineH:", lineH, "| name candidates:", nameWords.map(w => w.text));
-  } else {
-    console.log("Customer Name: (no VIN-like 17-char token found)");
-  }
-  document.getElementById('f_name').value = name;
-
-  // Type of work: keyword scan over the job description text
+  console.group("Type of Work (full-page keyword scan)");
   const typeMatches = [];
   for (const [regex, category] of KEYWORD_MAP) {
     if (regex.test(text)) {
@@ -518,8 +418,7 @@ function populateForm(data, imageWidth, imageHeight) {
       if (cb) cb.checked = true;
     }
   }
-  console.log("Type of Work matches:", typeMatches.length ? typeMatches : "(none)");
-
+  console.log("Matches:", typeMatches.length ? typeMatches : "(none)");
   console.groupEnd();
 }
 
