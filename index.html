@@ -253,6 +253,78 @@ function preprocess(source) {
   return out;
 }
 
+// Fixed-template regions to OCR individually, as fractions of the page
+// (x, y, w, h). Because this dealership's RO layout is fixed, cropping a
+// known zone and OCRing just that — with a tight character whitelist —
+// is far more reliable than hunting for the value in the full-page text.
+// NOTE: this assumes the page roughly fills the frame upright (as in a flat
+// scan). For badly cropped/rotated photos the full-page heuristics still run
+// as a fallback, so a wrong region crop degrades gracefully rather than
+// breaking. Add more entries here to pin down other fixed fields.
+const REGIONS = {
+  ro: {
+    label: "RO #",
+    rect: { x: 0.72, y: 0.0, w: 0.23, h: 0.09 }, // top-right corner
+    whitelist: "0123456789",
+    psm: "7", // single text line
+    parse: t => (t.match(/\d{6}/) || [""])[0],
+    target: "f_ro",
+  },
+};
+
+let ocrWorker = null;
+async function getWorker() {
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker('eng', undefined, {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          statusEl.textContent = `OCR: ${(m.progress * 100).toFixed(0)}%`;
+        }
+      }
+    });
+  }
+  return ocrWorker;
+}
+
+function cropRegion(canvas, rect) {
+  const sx = Math.round(canvas.width * rect.x);
+  const sy = Math.round(canvas.height * rect.y);
+  const sw = Math.round(canvas.width * rect.w);
+  const sh = Math.round(canvas.height * rect.h);
+  const c = document.createElement('canvas');
+  c.width = sw;
+  c.height = sh;
+  c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return c;
+}
+
+async function runRegionOcr(worker, prepped) {
+  console.group("Region OCR");
+  for (const key of Object.keys(REGIONS)) {
+    const region = REGIONS[key];
+    try {
+      const crop = cropRegion(prepped, region.rect);
+      await worker.setParameters({
+        tessedit_char_whitelist: region.whitelist || '',
+        tessedit_pageseg_mode: region.psm || '3',
+      });
+      const { data } = await worker.recognize(crop);
+      const raw = (data.text || '').trim();
+      const value = region.parse ? region.parse(raw) : raw;
+      console.log(`${region.label}: parsed "${value}" from region text "${raw}" (conf ${data.confidence})`);
+      if (value) {
+        const el = document.getElementById(region.target);
+        if (el) el.value = value;
+      } else {
+        console.log(`${region.label}: region OCR empty — keeping full-page heuristic result`);
+      }
+    } catch (err) {
+      console.log(`${region.label}: region OCR failed (${err.message}) — keeping full-page result`);
+    }
+  }
+  console.groupEnd();
+}
+
 async function runOcr(source) {
   captureBtn.disabled = true;
   uploadBtn.disabled = true;
@@ -260,17 +332,25 @@ async function runOcr(source) {
 
   try {
     const prepped = preprocess(source);
+    const worker = await getWorker();
+
+    // Pass 1: full page (auto layout, no whitelist) — drives Type of Work,
+    // Name, Tag, and serves as the fallback for RO #.
     statusEl.textContent = "Running OCR... this can take 10-30s";
-    const { data } = await Tesseract.recognize(prepped, 'eng', {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          statusEl.textContent = `OCR: ${(m.progress * 100).toFixed(0)}%`;
-        }
-      }
+    await worker.setParameters({
+      tessedit_char_whitelist: '',
+      tessedit_pageseg_mode: '3', // fully automatic page segmentation
     });
-    statusEl.textContent = "Done. Review the fields below before opening the form.";
+    const { data } = await worker.recognize(prepped);
     logOcrDebug(data, prepped.width, prepped.height);
     populateForm(data, prepped.width, prepped.height);
+
+    // Pass 2: targeted region OCR for fixed-position fields (overrides the
+    // full-page guess when it produces a clean value).
+    statusEl.textContent = "Reading fixed fields...";
+    await runRegionOcr(worker, prepped);
+
+    statusEl.textContent = "Done. Review the fields below before opening the form.";
     document.getElementById('reviewForm').style.display = 'block';
   } catch (err) {
     statusEl.textContent = "OCR error: " + err.message;
