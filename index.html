@@ -192,7 +192,7 @@ async function runOcr(source) {
       }
     });
     statusEl.textContent = "Done. Review the fields below before opening the form.";
-    populateForm(data);
+    populateForm(data, source.width, source.height);
     document.getElementById('reviewForm').style.display = 'block';
   } catch (err) {
     statusEl.textContent = "OCR error: " + err.message;
@@ -202,28 +202,38 @@ async function runOcr(source) {
   }
 }
 
-function populateForm(data) {
+function populateForm(data, imageWidth, imageHeight) {
   const words = (data.words || []).filter(w => w.text && w.text.trim().length);
   const text = data.text || "";
 
-  // Advisor #: exact match against the known dropdown list
+  // Advisor #: exact match against the known dropdown list.
+  // Uses the raw token (not digit-stripped) so dates like 11/18/25 can't
+  // collapse into a number that happens to match an advisor ID.
   let advisor = "";
   for (const w of words) {
-    const clean = w.text.replace(/\D/g, '');
-    if (ADVISORS.includes(clean)) { advisor = clean; break; }
+    const clean = w.text.trim();
+    if (/^\d+$/.test(clean) && ADVISORS.includes(clean)) { advisor = clean; break; }
   }
   document.getElementById('f_advisor').value = advisor;
 
-  // RO #: the 6-digit number that appears most often on the page
-  // (this RO repeats it in the header, barcode caption, and footer)
-  const freq = {};
-  for (const w of words) {
-    const clean = w.text.replace(/\D/g, '');
-    if (clean.length === 6) freq[clean] = (freq[clean] || 0) + 1;
-  }
-  let ro = "", max = 0;
-  for (const [k, v] of Object.entries(freq)) {
-    if (v > max) { max = v; ro = k; }
+  // RO #: a pure 6-digit token (no slashes/colons, so dates like 11/18/25
+  // can't be mistaken for it) located in the top-right corner of the page,
+  // where this dealership prints the RO number. Falls back to whichever
+  // pure 6-digit token repeats most often (header/barcode/footer).
+  const sixDigitWords = words.filter(w => /^\d{6}$/.test(w.text.trim()));
+  const topRight = sixDigitWords.filter(w =>
+    w.bbox.x0 > imageWidth * 0.55 && w.bbox.y1 < imageHeight * 0.25
+  );
+  let ro = "";
+  if (topRight.length) {
+    ro = topRight[0].text.trim();
+  } else {
+    const freq = {};
+    for (const w of sixDigitWords) freq[w.text] = (freq[w.text] || 0) + 1;
+    let max = 0;
+    for (const [k, v] of Object.entries(freq)) {
+      if (v > max) { max = v; ro = k; }
+    }
   }
   document.getElementById('f_ro').value = ro;
 
