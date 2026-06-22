@@ -197,13 +197,71 @@ fileInput.onchange = async () => {
   fileInput.value = '';
 };
 
+// Preprocess for OCR: upscale small images, convert to grayscale, and
+// binarize with Otsu's method so Tesseract sees clean black-on-white text.
+// Returns a new canvas (the source is left untouched).
+function preprocess(source) {
+  // Upscale so the long edge is at least ~2200px — Tesseract reads small
+  // print much better when characters span more pixels. Never downscale.
+  const longEdge = Math.max(source.width, source.height);
+  const scale = longEdge < 2200 ? 2200 / longEdge : 1;
+
+  const out = document.createElement('canvas');
+  out.width = Math.round(source.width * scale);
+  out.height = Math.round(source.height * scale);
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, out.width, out.height);
+
+  const img = ctx.getImageData(0, 0, out.width, out.height);
+  const px = img.data;
+
+  // Grayscale (luminance) + build a histogram for Otsu thresholding.
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < px.length; i += 4) {
+    const g = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+    px[i] = px[i + 1] = px[i + 2] = g;
+    hist[g]++;
+  }
+
+  // Otsu's method: pick the threshold that maximizes between-class variance.
+  const total = (out.width * out.height);
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = -1, threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) { maxVar = between; threshold = t; }
+  }
+
+  // Binarize.
+  for (let i = 0; i < px.length; i += 4) {
+    const v = px[i] > threshold ? 255 : 0;
+    px[i] = px[i + 1] = px[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  console.log(`Preprocess: ${source.width}x${source.height} -> ${out.width}x${out.height} (scale ${scale.toFixed(2)}), Otsu threshold ${threshold}`);
+  return out;
+}
+
 async function runOcr(source) {
   captureBtn.disabled = true;
   uploadBtn.disabled = true;
-  statusEl.textContent = "Running OCR... this can take 10-30s";
+  statusEl.textContent = "Preparing image...";
 
   try {
-    const { data } = await Tesseract.recognize(source, 'eng', {
+    const prepped = preprocess(source);
+    statusEl.textContent = "Running OCR... this can take 10-30s";
+    const { data } = await Tesseract.recognize(prepped, 'eng', {
       logger: m => {
         if (m.status === 'recognizing text') {
           statusEl.textContent = `OCR: ${(m.progress * 100).toFixed(0)}%`;
@@ -211,8 +269,8 @@ async function runOcr(source) {
       }
     });
     statusEl.textContent = "Done. Review the fields below before opening the form.";
-    logOcrDebug(data, source.width, source.height);
-    populateForm(data, source.width, source.height);
+    logOcrDebug(data, prepped.width, prepped.height);
+    populateForm(data, prepped.width, prepped.height);
     document.getElementById('reviewForm').style.display = 'block';
   } catch (err) {
     statusEl.textContent = "OCR error: " + err.message;
