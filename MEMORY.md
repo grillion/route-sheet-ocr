@@ -42,6 +42,27 @@ GitHub Pages for hosting (free HTTPS, required for camera access).
   count. Applied the same raw-digit guard to the Advisor # matcher as a
   preventative measure, even though no failure was observed there yet.
 
+- **2026-06-22 — preprocessing/region OCR added.** Kept Tesseract (Scribe
+  is built on it — same engine, not worth the rewrite). Added a
+  `preprocess()` pass (upscale small images to ~2200px long edge,
+  grayscale, Otsu binarize) and a two-pass pipeline: full-page OCR for
+  Type of Work / Name / Tag, then targeted region OCR (digit whitelist,
+  single-line PSM) for the RO# top-right corner, defined in a `REGIONS`
+  config for easy extension. Region OCR overrides the full-page RO# guess
+  when it yields a clean value, else degrades to the full-page result.
+
+- **2026-06-22 — name/tag bands broke after upscaling.** Customer Name came
+  back empty. Root cause: name/tag heuristics used *fixed pixel* vertical
+  bands (40px / 20px) to find words on the line below/beside an anchor.
+  Once `preprocess()` started upscaling to ~2200px, those absolute
+  thresholds were too small relative to the enlarged text and missed the
+  target line. Fix: size all row bands from the anchor word's own text
+  height (`lineH`/`labelH`), never hardcoded pixels. **Lesson: any pixel
+  threshold in the extraction heuristics must be relative to detected text
+  size or image dimensions, because preprocessing rescales the image.**
+  Also constrained the name search to the left column (x0 < 40% width) so
+  it can't grab the year/make/model text to the right of the VIN.
+
 ## Open questions / things to revisit if this expands beyond one dealership
 
 - Tag # and Customer Name extraction use layout-specific heuristics (VIN
