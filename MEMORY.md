@@ -63,6 +63,21 @@ GitHub Pages for hosting (free HTTPS, required for camera access).
   Also constrained the name search to the left column (x0 < 40% width) so
   it can't grab the year/make/model text to the right of the VIN.
 
+- **2026-06-22 — moved to explicit, calibratable field bounds.** The
+  per-field heuristics (VIN-anchor for name, TAG-label proximity, top-right
+  RO# search) were too over-fit to the one sample doc and kept breaking.
+  Replaced with region-based OCR as the *authoritative* path for all fixed
+  fields. The bounds now live in `regions.js` as a single `FIELD_RECTS`
+  object (fractional x/y/w/h per field) — the one thing you edit. Field
+  *logic* (whitelist, PSM, parse, target input) stays in `FIELD_LOGIC` in
+  the same file. Added `calibrate.html`: load a template photo, drag a box
+  per field, copy the generated `FIELD_RECTS` back into regions.js. Only
+  Type of Work still comes from a full-page keyword scan (it's spread across
+  job lines, not a single box). Files are no longer a single self-contained
+  HTML — now index.html + regions.js + calibrate.html (all still static).
+  **Key caveat: fractional bounds assume the page fills the frame upright;
+  calibrate on an image framed the same way you'll scan.**
+
 ## Open questions / things to revisit if this expands beyond one dealership
 
 - Tag # and Customer Name extraction use layout-specific heuristics (VIN

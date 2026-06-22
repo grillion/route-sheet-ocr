@@ -25,20 +25,26 @@ either on-device or on free-tier infrastructure:
 Single static file, no build step, no backend:
 
 ```
-index.html   — markup, styles, and all JS inline
+index.html     — markup, styles, scanner UI, OCR pipeline
+regions.js     — field bounds (FIELD_RECTS) + field logic (FIELD_LOGIC)
+calibrate.html — tool to draw field boxes and generate FIELD_RECTS
 ```
 
 Flow:
 
 1. User taps **Start Camera** (live capture, `getUserMedia`) or
    **Upload Photo** (file picker, for an existing image).
-2. The frame is drawn to an off-screen `<canvas>`.
-3. `Tesseract.recognize()` runs OCR on the canvas, returning full text plus
-   word-level bounding boxes (`data.words[i].bbox`).
-4. `populateForm()` applies heuristics (see below) to guess each Google
-   Form field from the OCR output and pre-fills an on-page review form.
-5. User reviews/corrects every field in the browser (nothing is sent
-   anywhere yet).
+2. The frame is drawn to an off-screen `<canvas>` and `preprocess()`d
+   (upscale, grayscale, Otsu binarize).
+3. **Pass 1 — full page:** `Tesseract.recognize()` over the whole image,
+   used for the Type of Work keyword scan and the debug overlay/word list.
+4. **Pass 2 — region OCR:** for each field in `regions.js`, the known box
+   is cropped and OCR'd with a field-specific character whitelist + PSM,
+   then `parse()`d into the final value. This is the authoritative path for
+   the fixed fields (name, RO #, advisor, tag).
+5. Results pre-fill an on-page review form; a visual overlay shows the word
+   boxes + region crops. User reviews/corrects every field (nothing sent
+   yet).
 6. **Build Pre-filled Link** assembles a
    `docs.google.com/forms/.../viewform?entry.X=...` URL from the current
    field values and shows it as a link to tap.
@@ -97,42 +103,54 @@ Reference photo used during development: a Nissan Armada RO, RO# 934986,
 Advisor# 142399, customer Cassandra N Rebecchi, jobs covering seatbelt,
 steering, multi-point inspection, brakes, tire inspection.
 
-## Field extraction heuristics (and why)
+## Field extraction (region-based)
 
-OCR on this layout is noisy (small print, overlapping pink boxes, mixed
-print/handwriting), so every heuristic below is a *best guess* — the user
-always reviews/edits before generating the link. None of this silently
-trusts OCR for a value that matters.
+Because the RO is a fixed template, fixed fields are read by **cropping a
+known box and OCRing just that crop** — far more reliable than searching the
+full-page text. Each field is defined in `regions.js`:
 
-- **Advisor #** — exact match of a raw, all-digit OCR token against the
-  five known advisor IDs from the form's dropdown. This is the most
-  reliable field because it's matched against a closed, finite set.
-- **RO #** — a pure 6-digit token (`^\d{6}$`, no separators) located in the
-  top-right quadrant of the page, where Nissan of Huntington prints the RO
-  number (it's also repeated in the barcode caption and footer). Falls
-  back to whichever pure 6-digit token appears most often on the page if
-  nothing is found top-right.
-  - **Bug fixed 2026-06-22**: the original version stripped *all*
-    non-digit characters from every OCR token before checking length 6.
-    That collapsed dates like `11/18/25` into `111825` — a fake 6-digit
-    "candidate" that could outrank the real RO number in the frequency
-    count. Dates must never enter the RO#/Advisor# candidate pools; always
-    require the raw token to already be pure digits.
-- **Tag #** — nearest OCR word to the right of a token containing "TAG",
-  within a small vertical band (same row). Often comes back empty since
-  the Tag # box is frequently blank on this dealership's RO.
-- **Customer Name** — looks for a 17-character VIN-like token, then takes
-  the run of all-caps words immediately below it (the customer name prints
-  directly under the VIN on this layout).
-- **Type of Work** — keyword regex scan over the full OCR text of the job
-  description lines (e.g. `BRAKE` → BRAKES, `TIRE` → TIRES, `STEER|
-  SUSPENSION` → SUSPENSION, `MULTI ?POINT|INSPECT` → MAINTENANCE). Multiple
-  categories can get checked; this is the fuzziest heuristic and most
-  likely to need manual correction.
-- **Customer Status** and **Express or Main Shop** are *never* auto-filled
-  — this information doesn't appear anywhere on the paper RO, so guessing
-  would be worse than leaving it blank. The user always picks these two
-  manually.
+- `FIELD_RECTS[key]` — the box, as fractions of the page (`x, y, w, h`). This
+  is the part you calibrate. Generate it by drawing on a template photo in
+  `calibrate.html`, then paste the output over this object.
+- `FIELD_LOGIC[key]` — `target` (which form input to fill), `whitelist` +
+  `psm` (Tesseract params for the crop), and `parse(rawText)` → final value.
+
+At runtime the two are merged into `REGIONS` and each crop is OCR'd with its
+own whitelist/PSM. Current fields: **name** (letters whitelist), **RO #**,
+**advisor #** (digits, parse prefers a known advisor ID), **tag #** (digits).
+OCR is still imperfect, so the user always reviews/edits before generating
+the link — nothing is trusted silently.
+
+Two fields are *not* region-based:
+
+- **Type of Work** — a keyword regex scan over the full-page OCR text of the
+  job-description lines (`BRAKE` → BRAKES, `TIRE` → TIRES, `STEER|SUSPENSION`
+  → SUSPENSION, `MULTI ?POINT|INSPECT` → MAINTENANCE, …). It's spread across
+  several job lines, not a single box, so a keyword scan fits better. Fuzzy;
+  most likely to need manual correction.
+- **Customer Status** and **Express or Main Shop** — *never* auto-filled;
+  this info isn't on the paper RO at all, so the user always picks them.
+
+**Why region-based replaced the old heuristics.** The first version inferred
+each field from full-page structure (VIN-anchor for the name, "TAG"-label
+proximity, a top-right 6-digit search for RO#). Those were over-fit to one
+sample document and brittle:
+
+- The RO# search stripped non-digits before checking for 6 digits, so a date
+  like `11/18/25` collapsed to `111825` and could win — values must never be
+  built from digit-stripped tokens.
+- Name/Tag used *fixed pixel* row bands that silently broke once `preprocess`
+  started upscaling images — **any pixel threshold in extraction must be
+  relative to detected text size or image dimensions, never hardcoded.**
+
+Region OCR sidesteps all of this: a digits-only whitelist on an isolated crop
+can't even see a date, and fractional bounds scale with any image size.
+
+**Limitation of fractional bounds:** they assume the page fills the frame
+upright (as in a flat scan). A badly cropped/rotated photo will misalign the
+crops; calibrate on an image framed the same way you'll scan. Rectifying the
+page (perspective transform) before cropping would lift this constraint but
+isn't implemented.
 
 ## Key decisions
 
