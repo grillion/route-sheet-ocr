@@ -36,6 +36,7 @@
     <input type="file" id="fileInput" accept="image/*" style="display:none;">
   </div>
   <div id="status"></div>
+  <button id="debugBtn" style="background:#555;font-size:0.85em;padding:6px 12px;">Show Debug Console</button>
 
   <form id="reviewForm">
     <h2 style="font-size:1em;">Review &amp; correct before opening the form</h2>
@@ -107,6 +108,24 @@
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
+// On-screen console for phones (no desktop browser / tethering needed).
+// Loaded on demand so it doesn't run unless you ask for it.
+document.getElementById('debugBtn').onclick = function () {
+  const btn = this;
+  if (window.eruda) { eruda.show(); return; }
+  btn.disabled = true;
+  btn.textContent = "Loading console...";
+  const s = document.createElement('script');
+  s.src = "https://cdn.jsdelivr.net/npm/eruda@3/eruda.min.js";
+  s.onload = () => {
+    eruda.init();
+    eruda.show();
+    btn.style.display = 'none';
+  };
+  s.onerror = () => { btn.disabled = false; btn.textContent = "Console failed to load"; };
+  document.body.appendChild(s);
+};
+
 const ADVISORS = ["142399","17824","159720","160629","159462"];
 
 const KEYWORD_MAP = [
