@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Route Sheet Scanner</title>
+<style>
+  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 12px; background: #111; color: #eee; }
+  h1 { font-size: 1.2em; }
+  video, canvas { width: 100%; border-radius: 8px; background: #000; }
+  button { font-size: 1em; padding: 10px 16px; margin: 6px 6px 6px 0; border-radius: 6px; border: none; background: #2a7; color: #fff; }
+  button:disabled { background: #555; }
+  #status { margin: 8px 0; min-height: 1.2em; color: #9cf; }
+  fieldset { border: 1px solid #444; border-radius: 6px; margin: 10px 0; padding: 8px; }
+  legend { color: #9cf; font-size: 0.9em; }
+  label.field { display: block; margin: 8px 0; }
+  label.field span { display: block; font-size: 0.85em; color: #aaa; margin-bottom: 2px; }
+  input[type=text], textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; border: 1px solid #555; background: #222; color: #eee; font-size: 1em; }
+  .choice { display: inline-block; margin: 4px 10px 4px 0; }
+  #reviewForm { display: none; }
+  #formLink { display: none; background: #27a; color: #fff; text-decoration: none; padding: 12px; border-radius: 6px; text-align: center; font-weight: bold; }
+  .warn { color: #fc6; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>Route Sheet Scanner</h1>
+
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <div id="controls">
+    <button id="startCam">Start Camera</button>
+    <button id="capture" disabled>Capture &amp; Scan</button>
+  </div>
+  <div id="status"></div>
+
+  <form id="reviewForm">
+    <h2 style="font-size:1em;">Review &amp; correct before opening the form</h2>
+
+    <label class="field"><span>Customer Name</span>
+      <input type="text" id="f_name">
+    </label>
+
+    <label class="field"><span>RO #</span>
+      <input type="text" id="f_ro">
+    </label>
+
+    <label class="field"><span>Advisor #</span>
+      <select id="f_advisor">
+        <option value="">-- select --</option>
+        <option value="142399">142399</option>
+        <option value="17824">17824</option>
+        <option value="159720">159720</option>
+        <option value="160629">160629</option>
+        <option value="159462">159462</option>
+      </select>
+    </label>
+
+    <label class="field"><span>Tag #</span>
+      <input type="text" id="f_tag">
+    </label>
+
+    <fieldset>
+      <legend>Customer Status <span class="warn">(not on the RO &mdash; pick manually)</span></legend>
+      <label class="choice"><input type="radio" name="status" value="WAIT"> WAIT</label>
+      <label class="choice"><input type="radio" name="status" value="DROP"> DROP</label>
+      <label class="choice"><input type="radio" name="status" value="DROP WITH LOANER"> DROP WITH LOANER</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Express or Main Shop <span class="warn">(not on the RO &mdash; pick manually)</span></legend>
+      <label class="choice"><input type="radio" name="shop" value="EXPRESS"> EXPRESS</label>
+      <label class="choice"><input type="radio" name="shop" value="MAIN SHOP"> MAIN SHOP</label>
+      <label class="choice"><input type="radio" name="shop" value="BOTH"> BOTH</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Type of Work <span class="warn">(auto-suggested from job lines &mdash; verify)</span></legend>
+      <label class="choice"><input type="checkbox" name="type" value="ENGINE"> ENGINE</label>
+      <label class="choice"><input type="checkbox" name="type" value="TRANSMISSION"> TRANSMISSION</label>
+      <label class="choice"><input type="checkbox" name="type" value="BODY"> BODY</label>
+      <label class="choice"><input type="checkbox" name="type" value="BRAKES"> BRAKES</label>
+      <label class="choice"><input type="checkbox" name="type" value="ELECTRICAL"> ELECTRICAL</label>
+      <label class="choice"><input type="checkbox" name="type" value="SUSPENSION"> SUSPENSION</label>
+      <label class="choice"><input type="checkbox" name="type" value="NOISE"> NOISE</label>
+      <label class="choice"><input type="checkbox" name="type" value="HEATING / AIR CONDITIONING"> HEATING / AIR CONDITIONING</label>
+      <label class="choice"><input type="checkbox" name="type" value="MAINTENANCE"> MAINTENANCE</label>
+      <label class="choice"><input type="checkbox" name="type" value="RECALL"> RECALL</label>
+      <label class="choice"><input type="checkbox" name="type" value="NYSI"> NYSI</label>
+      <label class="choice"><input type="checkbox" name="type" value="LEASE RETURN"> LEASE RETURN</label>
+      <label class="choice"><input type="checkbox" name="type" value="USED CAR"> USED CAR</label>
+      <label class="choice"><input type="checkbox" name="type" value="PDI"> PDI</label>
+      <label class="choice"><input type="checkbox" name="type" value="TIRES"> TIRES</label>
+    </fieldset>
+
+    <label class="field"><span>Notes</span>
+      <textarea id="f_notes" rows="4"></textarea>
+    </label>
+
+    <button type="button" id="genLink">Build Pre-filled Link</button>
+    <a id="formLink" href="#" target="_blank" rel="noopener"></a>
+  </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const ADVISORS = ["142399","17824","159720","160629","159462"];
+
+const KEYWORD_MAP = [
+  [/BRAKE/i, "BRAKES"],
+  [/\bTIRE/i, "TIRES"],
+  [/STEER|SUSPENSION|ALIGN/i, "SUSPENSION"],
+  [/MULTI ?\s?POINT|INSPECT/i, "MAINTENANCE"],
+  [/SEAT ?BELT|AIRBAG|BODY/i, "BODY"],
+  [/\bENGINE|\bOIL\b|FILTER/i, "ENGINE"],
+  [/TRANSMISSION|\bTRANS\b/i, "TRANSMISSION"],
+  [/ELECTRIC|BATTERY|WIRING/i, "ELECTRICAL"],
+  [/NOISE|RATTLE|SQUEAK/i, "NOISE"],
+  [/\bHEAT|A\/C|AIR COND/i, "HEATING / AIR CONDITIONING"],
+  [/RECALL/i, "RECALL"],
+  [/NYSI|INSPECTION STICKER/i, "NYSI"],
+];
+
+let videoStream;
+const video = document.getElementById('cam');
+const canvas = document.getElementById('canvas');
+const statusEl = document.getElementById('status');
+const captureBtn = document.getElementById('capture');
+
+document.getElementById('startCam').onclick = async () => {
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    video.srcObject = videoStream;
+    captureBtn.disabled = false;
+    statusEl.textContent = "Camera ready. Frame the form and capture.";
+  } catch (err) {
+    statusEl.textContent = "Camera error: " + err.message;
+  }
+};
+
+captureBtn.onclick = async () => {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  captureBtn.disabled = true;
+  statusEl.textContent = "Running OCR... this can take 10-30s";
+
+  try {
+    const { data } = await Tesseract.recognize(canvas, 'eng', {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          statusEl.textContent = `OCR: ${(m.progress * 100).toFixed(0)}%`;
+        }
+      }
+    });
+    statusEl.textContent = "Done. Review the fields below before opening the form.";
+    populateForm(data);
+    document.getElementById('reviewForm').style.display = 'block';
+  } catch (err) {
+    statusEl.textContent = "OCR error: " + err.message;
+  } finally {
+    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+  }
+};
+
+function populateForm(data) {
+  const words = (data.words || []).filter(w => w.text && w.text.trim().length);
+  const text = data.text || "";
+
+  // Advisor #: exact match against the known dropdown list
+  let advisor = "";
+  for (const w of words) {
+    const clean = w.text.replace(/\D/g, '');
+    if (ADVISORS.includes(clean)) { advisor = clean; break; }
+  }
+  document.getElementById('f_advisor').value = advisor;
+
+  // RO #: the 6-digit number that appears most often on the page
+  // (this RO repeats it in the header, barcode caption, and footer)
+  const freq = {};
+  for (const w of words) {
+    const clean = w.text.replace(/\D/g, '');
+    if (clean.length === 6) freq[clean] = (freq[clean] || 0) + 1;
+  }
+  let ro = "", max = 0;
+  for (const [k, v] of Object.entries(freq)) {
+    if (v > max) { max = v; ro = k; }
+  }
+  document.getElementById('f_ro').value = ro;
+
+  // Tag #: nearest word to the right of a "TAG" label, same row band
+  let tag = "";
+  const tagIdx = words.findIndex(w => /TAG/i.test(w.text));
+  if (tagIdx >= 0) {
+    const label = words[tagIdx];
+    const candidates = words.filter((w, i) =>
+      i > tagIdx &&
+      Math.abs(w.bbox.y0 - label.bbox.y0) < 20 &&
+      !/^(NO|#|\.)$/i.test(w.text)
+    );
+    if (candidates.length) tag = candidates[0].text.replace(/[^A-Za-z0-9]/g, '');
+  }
+  document.getElementById('f_tag').value = tag;
+
+  // Customer name: all-caps word run just below a VIN-like 17-char token
+  let name = "";
+  const vinIdx = words.findIndex(w => /^[A-HJ-NPR-Z0-9]{17}$/.test(w.text.toUpperCase()));
+  if (vinIdx >= 0) {
+    const vin = words[vinIdx];
+    const nameWords = words.filter(w =>
+      w.bbox.y0 > vin.bbox.y1 &&
+      w.bbox.y0 < vin.bbox.y1 + 40 &&
+      /^[A-Z]+$/.test(w.text)
+    );
+    name = nameWords.map(w => w.text).join(' ');
+  }
+  document.getElementById('f_name').value = name;
+
+  // Type of work: keyword scan over the job description text
+  for (const [regex, category] of KEYWORD_MAP) {
+    if (regex.test(text)) {
+      const cb = document.querySelector(`input[name="type"][value="${category}"]`);
+      if (cb) cb.checked = true;
+    }
+  }
+}
+
+document.getElementById('genLink').onclick = () => {
+  const base = "https://docs.google.com/forms/d/e/1FAIpQLScLJnRO7EemJcZTy9gP_iYE9FvcRBelDArE9dHf0evu6ZKARQ/viewform";
+  const params = new URLSearchParams();
+  params.set('usp', 'pp_url');
+  params.append('entry.1742178377', document.getElementById('f_name').value);
+  params.append('entry.438656768', document.getElementById('f_ro').value);
+  params.append('entry.1130646650', document.getElementById('f_advisor').value);
+  params.append('entry.22122272', document.getElementById('f_tag').value);
+
+  const status = document.querySelector('input[name="status"]:checked');
+  if (status) params.append('entry.1856597312', status.value);
+
+  const shop = document.querySelector('input[name="shop"]:checked');
+  if (shop) params.append('entry.707168016', shop.value);
+
+  document.querySelectorAll('input[name="type"]:checked').forEach(cb =>
+    params.append('entry.454520462', cb.value)
+  );
+
+  params.append('entry.760985235', document.getElementById('f_notes').value);
+
+  const url = `${base}?${params.toString()}`;
+  const link = document.getElementById('formLink');
+  link.href = url;
+  link.style.display = 'block';
+  link.textContent = "Tap to open the pre-filled form";
+};
+</script>
+</body>
+</html>
