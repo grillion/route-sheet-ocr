@@ -10,10 +10,10 @@
 // framed the way you'll actually scan it, drag a box over each field, and
 // paste the generated FIELD_RECTS block over the one below.
 const FIELD_RECTS = {
-  name:    { x: 0.0500, y: 0.4300, w: 0.3400, h: 0.0300 },
-  ro:      { x: 0.7200, y: 0.0000, w: 0.2300, h: 0.0900 },
-  advisor: { x: 0.4000, y: 0.2900, w: 0.1000, h: 0.0400 },
-  tag:     { x: 0.8600, y: 0.4700, w: 0.1300, h: 0.0300 },
+  name:     { x: 0.1188, y: 0.3593, w: 0.2328, h: 0.0220 },
+  ro:       { x: 0.7777, y: 0.0105, w: 0.1517, h: 0.0454 },
+  advisor:  { x: 0.7106, y: 0.4213, w: 0.0776, h: 0.0200 },
+  tag:      { x: 0.8842, y: 0.4140, w: 0.0631, h: 0.0165 },
 };
 
 // ===========================================================================
