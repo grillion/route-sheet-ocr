@@ -117,7 +117,9 @@ while ($stack.Count -gt 0 -and $count -lt $MaxElements) {
     $autoId = Clean $el.Current.AutomationId
     $class = Clean $el.Current.ClassName
     $value = Clean (Get-ElementText $el)
-    if ($value) { $withText++ }
+    # Count anything that carries readable content. Many apps (ERA-IGNITE
+    # included) expose their data in the Name property, not Value/Text.
+    if ($value -or $name) { $withText++ }
     $r = $el.Current.BoundingRectangle
     $rect = "-"
     if ($r -and -not [double]::IsInfinity($r.X) -and $r.Width -ge 0) {
@@ -151,11 +153,11 @@ if ($count -ge $MaxElements) { [void]$sb.AppendLine("NOTE: hit MaxElements cap (
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
 Write-Host "Window  : $title"
-Write-Host "Elements: $count  (with readable text: $withText)"
+Write-Host "Elements: $count  (with readable Name/Value: $withText)"
 Write-Host "Saved to: $OutFile"
-if ($withText -eq 0) {
+if ($withText -le 1) {
   Write-Host ""
-  Write-Host "No elements exposed readable text. This app's screen is likely a custom-drawn" -ForegroundColor Yellow
-  Write-Host "surface (e.g. a terminal emulator) that UI Automation can't read - we'll" -ForegroundColor Yellow
-  Write-Host "probably need the OCR fallback for this screen." -ForegroundColor Yellow
+  Write-Host "Almost no elements exposed readable content. This screen is likely a" -ForegroundColor Yellow
+  Write-Host "custom-drawn surface (e.g. a terminal emulator) that UI Automation can't" -ForegroundColor Yellow
+  Write-Host "read - we'd need the OCR fallback for this screen." -ForegroundColor Yellow
 }

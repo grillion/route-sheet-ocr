@@ -13,33 +13,64 @@ no recognition errors and no calibration. The catch: it only works if the app
 exposes its content to UI Automation. Modern WPF/WinForms/WebView screens
 usually do; an old terminal-emulator screen may not. So we check first.
 
-## Phased plan
+## Status: working on ERA-IGNITE
 
-1. **Inspect (you are here).** Run `Inspect-UIA.ps1`, focus the ERA screen,
-   and it dumps that window's UI Automation tree to a `.txt` on your Desktop.
-   This tells us whether the data is reachable and the exact element
-   identifiers to target.
-2. **Extract.** Using the dump, build a script that pulls the specific fields
-   (customer name, RO #, advisor, tag, job/op lines) by AutomationId/Name.
-3. **Prefill + hotkey.** Map the values to the Google Form pre-filled URL,
-   open it in the default browser, and bind the whole thing to a global
-   hotkey (no-install, via a registered hotkey or a shortcut key).
+Confirmed that ERA-IGNITE's **RO Billing** screen is fully readable via UI
+Automation (the data lives in each element's `Name` property). The tool reads
+these fields directly, with no OCR:
 
-## Step 1 — run the inspector
+- **Customer name** — from the `(custno) NAME` element
+- **RO #** — from the window title (`... RO Billing <ro> ...`)
+- **Advisor #** — from the `(advisorno) NAME` element whose number is a known
+  advisor ID
+- **Tag #** — from the value next to the `Tag#` label (often blank)
 
-In PowerShell, from this folder:
+Not auto-filled (you pick these in the browser before submitting):
+**Customer Status**, **Express/Main Shop** (not on this screen), and
+**Type of Work** (it's inside ERA's grid controls, which UI Automation
+doesn't expose).
+
+## Files
+
+- `Inspect-UIA.ps1` — diagnostic tree dumper (used to discover the layout;
+  rerun it if a *different* ERA screen needs reading).
+- `Extract-ERA.ps1` — reads the focused ERA screen and opens the pre-filled
+  form. Run with `-Delay 4` to test by hand, `-DryRun` to print without
+  opening the browser.
+- `Start-EraHotkey.ps1` — registers the global hotkey that runs the extractor.
+
+## Daily use
+
+1. Start the hotkey listener once (leave it minimized):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\Start-EraHotkey.ps1
+   ```
+   Default hotkey is **Ctrl+Alt+R** (change with `-Modifiers`/`-Key`).
+2. In ERA-IGNITE, open the RO Billing screen for the customer.
+3. Press the hotkey. The default browser opens the Google Form pre-filled
+   with customer/RO/advisor/tag. Set Status, Shop, and Type of Work, then
+   Submit.
+
+## Testing without the hotkey
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Inspect-UIA.ps1
+# Focus ERA during the countdown; prints values + URL, doesn't open browser
+powershell -ExecutionPolicy Bypass -File .\Extract-ERA.ps1 -Delay 4 -DryRun
 ```
 
-You get a 4-second countdown — switch to the ERA Ignite / eraccess window you
-want to read during it. When it finishes it prints a summary and saves
-`uia-dump-<timestamp>.txt` to your Desktop.
+## Auto-start the hotkey at login (optional)
 
-**Then send me that .txt file.** The summary line "with readable text: N"
-is the key signal: if N is 0, that screen is opaque to UI Automation and
-we'll plan the OCR fallback for it; if N is healthy, we proceed to the
-extractor.
+Put a shortcut to this in your Startup folder (`shell:startup`):
 
-Options: `-Delay <seconds>` (default 4), `-OutFile <path>`.
+```
+powershell.exe -WindowStyle Minimized -ExecutionPolicy Bypass -File "C:\Users\frabklon\route-sheet-ocr\windows\Start-EraHotkey.ps1"
+```
+
+## Re-inspecting a new screen
+
+If you later want to read fields that live on a different ERA screen, run
+`Inspect-UIA.ps1`, focus that screen during the countdown, and send the
+resulting Desktop `.txt`. The "with readable Name/Value: N" line tells you if
+that screen is reachable (N healthy) or opaque/OCR-only (N ~ 0).
+
+Options: `Inspect-UIA.ps1 -Delay <seconds>` (default 4), `-OutFile <path>`.
