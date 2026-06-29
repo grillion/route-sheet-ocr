@@ -78,6 +78,23 @@ GitHub Pages for hosting (free HTTPS, required for camera access).
   **Key caveat: fractional bounds assume the page fills the frame upright;
   calibrate on an image framed the same way you'll scan.**
 
+- **2026-06-28 — pivoted to a Windows desktop tool (no phone, no OCR).** The
+  real workflow is at a desktop running Reynolds & Reynolds **ERA-IGNITE**,
+  not a phone. New approach in `windows/`: a global hotkey
+  (`Start-EraHotkey.ps1`, default Ctrl+Alt+R) runs `Extract-ERA.ps1`, which
+  reads the focused ERA RO Billing screen via **Windows UI Automation**
+  (`System.Windows.Automation`) and opens the pre-filled Google Form. No
+  installs (built-in .NET), no OCR, no Tesseract. Verified ERA-IGNITE exposes
+  its data via UIA — **the values are in each element's `Name` property, not
+  Value/Text patterns** (that tripped up the inspector's first readability
+  counter). Field rules: RO# from window title (`RO Billing <n>`); customer
+  vs. advisor both render as `(<number>) NAME` and are told apart by whether
+  the number is a known advisor ID; tag from the value next to `Tag#`. Type
+  of Work lives in ERA's grid controls (`PowerGridWnd`) which UIA does NOT
+  expose — left manual, along with Customer Status and Express/Main Shop
+  (not on the screen). The browser/phone OCR tool (index.html, regions.js,
+  calibrate.html) still exists as the photo-based fallback path.
+
 ## Open questions / things to revisit if this expands beyond one dealership
 
 - Tag # and Customer Name extraction use layout-specific heuristics (VIN
