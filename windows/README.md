@@ -34,10 +34,39 @@ doesn't expose).
 
 - `Inspect-UIA.ps1` — diagnostic tree dumper (used to discover the layout;
   rerun it if a *different* ERA screen needs reading).
+- `Probe-Grid.ps1` — deep probe of ERA's `PowerGridWnd` controls (the Opcode
+  grid that holds Type of Work) to see if their cells are reachable via UIA.
 - `Extract-ERA.ps1` — reads the focused ERA screen and opens the pre-filled
   form. Run with `-Delay 4` to test by hand, `-DryRun` to print without
   opening the browser.
 - `Start-EraHotkey.ps1` — registers the global hotkey that runs the extractor.
+
+## Type of Work — grid probe
+
+The Opcode grid (e.g. `24NIZSEATBLT`, `16NIZSTEERSTIFF`) is the source for
+Type of Work, but it's a custom-drawn ERA `PowerGridWnd` that came back empty
+in the plain UIA dump. Before falling back to OCR, `Probe-Grid.ps1` tries
+harder to read it three ways per grid: **GridPattern**, **TablePattern**, and
+a full **RawView** subtree walk (RawView exposes elements the ControlView dump
+can't see).
+
+Run it with the RO Billing screen focused (Opcode grid visible):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Probe-Grid.ps1
+```
+
+Focus ERA during the 4-second countdown. It saves
+`uia-gridprobe-<timestamp>.txt` to your Desktop and prints a verdict:
+
+- **`readable: N` with N > 0** — a grid exposes its cells; Type of Work can be
+  read exactly with **no OCR**. Send the `.txt` to wire it up.
+- **`No grid exposed its cells`** — the grid is opaque; fall back to OCRing
+  just the grid's rectangle (UIA can still locate the rectangle) using
+  Windows' built-in OCR engine.
+
+Options: `-Delay <seconds>` (default 4), `-OutFile <path>`,
+`-MaxElements <n>` (default 20000).
 
 ## Daily use
 
